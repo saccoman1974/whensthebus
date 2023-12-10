@@ -1,7 +1,3 @@
-#!/usr/bin/env python
-
-"""Get live UK bus times in your terminal or in a libnotify popup"""
-
 import argparse
 import datetime
 import urllib
@@ -29,8 +25,8 @@ class BusInfo:
     def __init__(
         self, app_id, app_key, api_base="http://transportapi.com/v3/"
     ):
-        self.app_id = app_id
-        self.app_key = app_key
+        self.app_id = "b1e4e377"
+        self.app_key = "4442a97d7cd2d588decfc1e5148b9429"
         self.api_base = api_base
         self.log = logging.getLogger(type(self).__name__)
 
@@ -65,45 +61,58 @@ class BusInfo:
             ) from thrown_exc
 
     def live_bus_query(self, atco, queue_obj):
-        """
-        Get live buses for a single ATCO code.
+            """
+            Get live buses for a single ATCO code.
 
-        atco: The ATCO code to query.
-        queue_obj: The queue to put the obtained data on to.
+            atco: The ATCO code to query.
+            queue_obj: The queue to put the obtained data on to.
 
-        This function doesn't return anything, as it's designed to be used in
-        multiprocessing. As such, the data is put onto the specified queue.
-        """
+            This function doesn't return anything, as it's designed to be used in
+            multiprocessing. As such, the data is put onto the specified queue.
+            """
 
-        path = "/uk/bus/stop/{}/live.json".format(atco)
+            path = "/uk/bus/stop/{}/live.json".format(atco)
 
-        output = self.call_api(path)
-        if "error" in output:
-            raise ValueError(output["error"])
+            output = self.call_api(path)
+            if "error" in output:
+                raise ValueError(output["error"])
 
-        # route -> times
-        departures = collections.defaultdict(list)
+            # Print the entire API response
+            print("API Response for {}: {}".format(atco, output))
 
-        for sub in output["departures"].values():
-            for departure in sub:
-                dep_name = "{} to {}".format(
-                    departure["line"], departure["direction"]
-                )
-                departures[dep_name].append(
-                    timedelta_from_departure(departure)
-                )
+            # route -> times
+            departures = collections.defaultdict(list)
 
-        # Sort to show the minimum time first...
-        for tds in departures.values():
-            tds.sort()
+            for sub in output["departures"].values():
+                for departure in sub:
+                    dep_name = "{} to {}".format(
+                        departure["line"], departure["direction"]
+                    )
+                    departures[dep_name].append(
+                        {"origin": departure.get("origin_text", "Unknown"),
+                         "time": timedelta_from_departure(departure)}
+                    )
 
-        # ...then sort the lines to show the closest.
-        departures = collections.OrderedDict(
-            sorted([(k, v) for k, v in departures.items()], key=lambda x: x[1])
-        )
+            # Print the structure of departures
+            print("Departures for {}: {}".format(atco, departures))
 
-        queue_obj.put({atco: LiveBusSchedule(output["name"], departures)})
+            # Sort to show the minimum time first...
+            for route, stops in departures.items():
+                stops.sort(key=lambda x: x["time"])
 
+            # ...then sort the routes to show the closest.
+            departures = collections.OrderedDict(
+                sorted([(k, v) for k, v in departures.items()], key=lambda x: x[1][0]["time"])
+            )
+
+            queue_obj.put({atco: LiveBusSchedule(output["name"], departures)})  
+
+    def get_next_arrivals(self, bus_stop_id):
+        path = f"uk/bus/stop/{bus_stop_id}/live.json"
+        data = self.call_api(path)
+        arrivals = data.get('departures', {}).get('all', [])
+        return arrivals[:10]#!/usr/bin/env python
+       
     def live_bus_query_multi(self, atcos, timeout):
         """
         Asynchronous wrapper around live_bus_query.
@@ -228,12 +237,6 @@ def parse_args():
 
 
 def main():
-    """
-    Use BusInfo to query TransportAPI, then lay out the found bus times to
-    stdout. Most of the specific formatting work is offloaded to other
-    functions, but the actual printing and layout work happens here.
-    """
-
     args = parse_args()
 
     bus = BusInfo(os.getenv("WTB_APP_ID"), os.getenv("WTB_APP_KEY"))
@@ -243,16 +246,14 @@ def main():
     for atco_idx, (atco, lbs) in enumerate(results.items()):
         print("{} ({}):".format(lbs.name, atco))
 
-        for route, times in lbs.departures.items():
-            print(
-                "- {}: {}".format(
-                    route, ", ".join(human_timedelta(t) for t in times)
-                )
-            )
+        for route, stops in lbs.departures.items():
+            print("- {}: {}".format(
+                route,
+                ", ".join("{} in {}".format(stop["origin"], human_timedelta(stop["time"])) if stop["time"].total_seconds() >= 0 else "{} ago".format(stop["origin"]) for stop in stops)
+            ))
 
         if atco_idx + 1 < len(results):
             print()
-
 
 if __name__ == "__main__":
     main()
