@@ -60,6 +60,7 @@ class BusInfo:
                 "Invalid JSON: {}".format(req_obj.text)
             ) from thrown_exc
 
+
     def live_bus_query(self, atco, queue_obj):
         """
         Get live buses for a single ATCO code.
@@ -86,16 +87,17 @@ class BusInfo:
                     departure["line"], departure["direction"]
                 )
                 departures[dep_name].append(
-                    timedelta_from_departure(departure)
+                    {"origin": departure.get("origin_text", "Unknown"),
+                    "time": timedelta_from_departure(departure)}
                 )
 
         # Sort to show the minimum time first...
         for tds in departures.values():
-            tds.sort()
+            tds.sort(key=lambda d: d['time'])
 
         # ...then sort the lines to show the closest.
         departures = collections.OrderedDict(
-            sorted([(k, v) for k, v in departures.items()], key=lambda x: x[1])
+            sorted([(k, v) for k, v in departures.items()], key=lambda x: x[1][0]['time'] if x[1] else datetime.timedelta())
         )
 
         queue_obj.put({atco: LiveBusSchedule(output["name"], departures)})
@@ -146,7 +148,6 @@ class BusInfo:
             process.terminate()
 
         return results
-
 
 def human_timedelta(tdelta):
     """
@@ -224,16 +225,9 @@ def parse_args():
 
 
 def main():
-    """
-    Use BusInfo to query TransportAPI, then lay out the found bus times to
-    stdout. Most of the specific formatting work is offloaded to other
-    functions, but the actual printing and layout work happens here.
-    """
-
     args = parse_args()
 
     bus = BusInfo(os.getenv("WTB_APP_ID"), os.getenv("WTB_APP_KEY"))
-
     results = bus.live_bus_query_multi(args.atco, args.timeout)
 
     for atco_idx, (atco, lbs) in enumerate(results.items()):
@@ -242,13 +236,12 @@ def main():
         for route, times in lbs.departures.items():
             print(
                 "- {}: {}".format(
-                    route, ", ".join(human_timedelta(t) for t in times)
+                    route, ", ".join(f"{t['origin']} due in {human_timedelta(t['time'])}" for t in times)
                 )
             )
 
         if atco_idx + 1 < len(results):
             print()
-
 
 if __name__ == "__main__":
     main()
